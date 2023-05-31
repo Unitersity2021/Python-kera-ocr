@@ -1,64 +1,42 @@
-from flask import Flask, jsonify, request
-app = Flask(__name__)
-@app.route('/')
-def index():
-    return 'Server Works!'
+import numpy as np
+import json
+import matplotlib.pyplot as plt
+import keras_ocr
 
-# Sample data
-graphics = [
-    {"id": 1, "title": "Graphic 1", "name": "Star 1"},
-    {"id": 2, "title": "Graphic 2", "name": "Star 2"}
-]
+# Load the pre-trained model
+pipeline = keras_ocr.pipeline.Pipeline()
 
-#GET -Retrieve all
-@app.route('/graphics', methods=['GET'])
-def get_graphics():
-    return jsonify(graphics)
+# Provide an image for OCR
+image_path = 'path/to/your/image.jpg'
+image = keras_ocr.tools.read(image_path)
 
-# GET - Retrieve a specific graphic by ID
-@app.route('/graphics/<int:graphic_id>', methods=['GET'])
-def get_graphic(graphic_id):
-    graphic = [graphic for graphic in graphics if graphic['id'] == graphic_id]
-    if len(graphic) == 0:
-        return jsonify({'error': 'graphic not found'}), 404
-    return jsonify(graphic[0])
+# Perform OCR
+predictions = pipeline.recognize([image])
 
-# POST - Create a new graphic
-@app.route('/graphics', methods=['POST'])
-def create_graphic():
-    if 'title' not in request.json or 'author' not in request.json:
-        return jsonify({'error': 'Title and author are required'}), 400
-    new_graphic = {
-        'id': graphics[-1]['id'] + 1,
-        'title': request.json['title'],
-        'author': request.json['author']
-    }
-    graphics.append(new_graphic)
-    return jsonify(new_graphic), 201
+# Extract the predictions and left coordinates
+prediction_boxes = predictions[0]['boxes']
+left_coordinates = [box[0][0] for box in prediction_boxes]
 
-# PUT - Update an existing graphic
-@app.route('/graphics/<int:graphic_id>', methods=['PUT'])
-def update_graphic(graphic_id):
-    graphic = [graphic for graphic in graphics if graphic['id'] == graphic_id]
-    if len(graphic) == 0:
-        return jsonify({'error': 'graphic not found'}), 404
-    graphic[0]['title'] = request.json.get('title', graphic[0]['title'])
-    graphic[0]['author'] = request.json.get('author', graphic[0]['author'])
-    return jsonify(graphic[0])
+# Get the indices that would sort the left coordinates
+sorted_indices = np.argsort(left_coordinates)
 
-# DELETE - Delete an existing graphic
-@app.route('/graphics/<int:graphic_id>', methods=['DELETE'])
-def delete_graphic(graphic_id):
-    graphic = [graphic for graphic in graphics if graphic['id'] == graphic_id]
-    if len(graphic) == 0:
-        return jsonify({'error': 'graphic not found'}), 404
-    graphics.remove(graphic[0])
-    return jsonify({'result': 'graphic deleted'})
+# Sort the predictions and left coordinates based on sorted indices
+sorted_predictions = [predictions[0]['text'][i] for i in sorted_indices]
+sorted_left_coordinates = [left_coordinates[i] for i in sorted_indices]
 
-if __name__ == '__main__':
-    app.run(debug=True)
-    
-    #!/usr/bin/env python
+# Create a dictionary with 'text' and 'order' keys
+text_data = {
+    'text': sorted_predictions,
+    'order': list(range(1, len(sorted_predictions) + 1))
+}
+
+# Convert the dictionary to JSON
+json_data = json.dumps(text_data, indent=4)
+
+# Print the JSON data
+print(json_data)
+
+#!/usr/bin/env python
 # coding: utf-8
 
 import numpy as np
@@ -238,4 +216,5 @@ def getPredictions(image):
         previous = label_tag
         
     return img_bb, entities
+
 
