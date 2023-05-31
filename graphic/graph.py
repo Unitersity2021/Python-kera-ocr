@@ -1,3 +1,118 @@
+import argparse
+import math, keras_ocr
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--image', type=str, 
+					help='path to image')
+parser.add_argument('--thresh', type=int, default=15, 
+					help='threshold to distinguish new rows')
+parser.add_argument('--order', type=str, default='yes', 
+					help='enter y or yes to order detections in a human readable way')
+args = parser.parse_args()
+
+def detect_w_keras(image_path):
+	"""Function returns detected text from image"""
+
+	# Initialize pipeline
+	pipeline = keras_ocr.pipeline.Pipeline()
+
+	# Read in image path
+	read_image = keras_ocr.tools.read(image_path)
+
+	# prediction_groups is a list of (word, box) tuples
+	prediction_groups = pipeline.recognize([read_image]) 
+
+	return prediction_groups[0]
+
+
+def get_distance(predictions):
+	"""
+	Function returns list of dictionaries with (key,value):
+		* text : detected text in image
+		* center_x : center of bounding box (x)
+		* center_y : center of bounding box (y)
+		* distance_from_origin : hypotenuse
+		* distance_y : distance between y and origin (0,0)
+	...for each bounding box (detections). 
+	"""
+
+	# Point of origin
+	x0, y0 = 0, 0 
+
+	# Generate dictionary
+	detections = []
+	for group in predictions:
+		
+		# Get center point of bounding box
+		top_left_x, top_left_y = group[1][0]
+		bottom_right_x, bottom_right_y = group[1][1]
+		center_x, center_y = (top_left_x + bottom_right_x)/2, (top_left_y + bottom_right_y)/2
+	
+		# Use the Pythagorean Theorem to solve for distance from origin
+		distance_from_origin = math.dist([x0,y0], [center_x, center_y])
+
+		# Calculate difference between y and origin to get unique rows
+		distance_y = center_y - y0
+		
+		# Append all results
+		detections.append({
+							'text': group[0], 
+							'center_x': center_x, 
+							'center_y': center_y, 
+							'distance_from_origin': distance_from_origin,
+							'distance_y': distance_y
+						})
+	
+	return detections 
+
+
+def distinguish_rows(lst, thresh=15):
+	"""Function to help distinguish unique rows"""
+	sublists = []
+	for i in range(0, len(lst)-1):
+		if (lst[i+1]['distance_y'] - lst[i]['distance_y'] <= thresh):
+			if lst[i] not in sublists:
+				sublists.append(lst[i])
+			sublists.append(lst[i+1])
+		else:
+			yield sublists
+			sublists = [lst[i+1]]
+	yield sublists
+
+def main(image_path, thresh, order='yes'):
+	"""Function returns predictions from left to right & top to bottom"""
+	predictions = detect_w_keras(image_path)
+	predictions = get_distance(predictions)
+	predictions = list(distinguish_rows(predictions, thresh))
+	
+	# Remove all empty rows
+	predictions = list(filter(lambda x:x!=[], predictions))
+
+	# Order text detections in human readable format
+	ordered_preds = []
+	ylst = ['yes', 'y']
+	for row in predictions:
+		if order in ylst: row = sorted(row, key=lambda x:x['distance_from_origin'])
+		for each in row: ordered_preds.append(each['text'])
+	
+	return ordered_preds
+
+if __name__=='__main__':
+	
+	image = args.image
+	thresh = args.thresh
+	order = args.order
+	
+	print(f'Generating predictions for {image}...')
+	predictions = main(image, thresh, order)
+	print(predictions)
+
+
+
+	
+
+
+
 import numpy as np
 import json
 import matplotlib.pyplot as plt
@@ -7,7 +122,6 @@ import keras_ocr
 pipeline = keras_ocr.pipeline.Pipeline()
 
 # Provide an image for OCR
-image_path = 'path/to/your/image.jpg'
 image = keras_ocr.tools.read(image_path)
 
 # Perform OCR
@@ -35,186 +149,3 @@ json_data = json.dumps(text_data, indent=4)
 
 # Print the JSON data
 print(json_data)
-
-#!/usr/bin/env python
-# coding: utf-8
-
-import numpy as np
-import pandas as pd
-import cv2
-import pytesseract
-from glob import glob
-import spacy
-import re
-import string
-import warnings
-warnings.filterwarnings('ignore')
-
-### Load NER model
-model_ner = spacy.load('./output/model-best/')
-
-
-def cleanText(txt):
-    whitespace = string.whitespace
-    punctuation = "!#$%&\'()*+:;<=>?[\\]^`{|}~"
-    tableWhitespace = str.maketrans('','',whitespace)
-    tablePunctuation = str.maketrans('','',punctuation)
-    text = str(txt)
-    #text = text.lower()
-    removewhitespace = text.translate(tableWhitespace)
-    removepunctuation = removewhitespace.translate(tablePunctuation)
-    
-    return str(removepunctuation)
-
-# group the label
-class groupgen():
-    def __init__(self):
-        self.id = 0
-        self.text = ''
-        
-    def getgroup(self,text):
-        if self.text == text:
-            return self.id
-        else:
-            self.id +=1
-            self.text = text
-            return self.id
-        
-
-
-def parser(text,label):
-    if label == 'PHONE':
-        text = text.lower()
-        text = re.sub(r'\D','',text)
-        
-    elif label == 'EMAIL':
-        text = text.lower()
-        allow_special_char = '@_.\-'
-        text = re.sub(r'[^A-Za-z0-9{} ]'.format(allow_special_char),'',text)
-        
-    elif label == 'WEB':
-        text = text.lower()
-        allow_special_char = ':/.%#\-'
-        text = re.sub(r'[^A-Za-z0-9{} ]'.format(allow_special_char),'',text)
-        
-    elif label in ('NAME', 'DES'):
-        text = text.lower()
-        text = re.sub(r'[^a-z ]','',text)
-        text = text.title()
-        
-    elif label == 'ORG':
-        text = text.lower()
-        text = re.sub(r'[^a-z0-9 ]','',text)
-        text = text.title()
-        
-    return text
-
-
-
-grp_gen = groupgen()
-
-def getPredictions(image):
-    # extract data using Pytesseract 
-    tessData = pytesseract.image_to_data(image)
-    # convert into dataframe
-    tessList = list(map(lambda x:x.split('\t'), tessData.split('\n')))
-    df = pd.DataFrame(tessList[1:],columns=tessList[0])
-    df.dropna(inplace=True) # drop missing values
-    df['text'] = df['text'].apply(cleanText)
-
-    # convet data into content
-    df_clean = df.query('text != "" ')
-    content = " ".join([w for w in df_clean['text']])
-    print(content)
-    # get prediction from NER model
-    doc = model_ner(content)
-
-    # converting doc in json
-    docjson = doc.to_json()
-    doc_text = docjson['text']
-
-    # creating tokens
-    datafram_tokens = pd.DataFrame(docjson['tokens'])
-    datafram_tokens['token'] = datafram_tokens[['start','end']].apply(
-        lambda x:doc_text[x[0]:x[1]] , axis = 1)
-
-    right_table = pd.DataFrame(docjson['ents'])[['start','label']]
-    datafram_tokens = pd.merge(datafram_tokens,right_table,how='left',on='start')
-    datafram_tokens.fillna('O',inplace=True)
-
-    # join lable to df_clean dataframe
-    df_clean['end'] = df_clean['text'].apply(lambda x: len(x)+1).cumsum() - 1 
-    df_clean['start'] = df_clean[['text','end']].apply(lambda x: x[1] - len(x[0]),axis=1)
-
-    # inner join with start 
-    dataframe_info = pd.merge(df_clean,datafram_tokens[['start','token','label']],how='inner',on='start')
-
-    # Bounding Box
-
-    bb_df = dataframe_info.query("label != 'O' ")
-
-    bb_df['label'] = bb_df['label'].apply(lambda x: x[2:])
-    bb_df['group'] = bb_df['label'].apply(grp_gen.getgroup)
-
-    # right and bottom of bounding box
-    bb_df[['left','top','width','height']] = bb_df[['left','top','width','height']].astype(int)
-    bb_df['right'] = bb_df['left'] + bb_df['width']
-    bb_df['bottom'] = bb_df['top'] + bb_df['height']
-
-    # tagging: groupby group
-    col_group = ['left','top','right','bottom','label','token','group']
-    group_tag_img = bb_df[col_group].groupby(by='group')
-    img_tagging = group_tag_img.agg({
-
-        'left':min,
-        'right':max,
-        'top':min,
-        'bottom':max,
-        'label':np.unique,
-        'token':lambda x: " ".join(x)
-
-    })
-
-    img_bb = image.copy()
-    for l,r,t,b,label,token in img_tagging.values:
-        cv2.rectangle(img_bb,(l,t),(r,b),(0,255,0),2)
-
-        cv2.putText(img_bb,label,(l,t),cv2.FONT_HERSHEY_PLAIN,1,(255,0,255),2)
-
-
-    # Entities
-
-    info_array = dataframe_info[['token','label']].values
-    entities = dict(NAME=[],ORG=[],DES=[],PHONE=[],EMAIL=[],WEB=[])
-    previous = 'O'
-
-    for token, label in info_array:
-        bio_tag = label[0]
-        label_tag = label[2:]
-
-        # step -1 parse the token
-        text = parser(token,label_tag)
-
-        if bio_tag in ('B','I'):
-
-            if previous != label_tag:
-                entities[label_tag].append(text)
-
-            else:
-                if bio_tag == "B":
-                    entities[label_tag].append(text)
-
-                else:
-                    if label_tag in ("NAME",'ORG','DES'):
-                        entities[label_tag][-1] = entities[label_tag][-1] + " " + text
-
-                    else:
-                        entities[label_tag][-1] = entities[label_tag][-1] + text
-
-
-
-        previous = label_tag
-        
-    return img_bb, entities
-
-
